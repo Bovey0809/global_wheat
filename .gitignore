@@ -1,0 +1,7 @@
+data
+.mypy_cache/
+.vscode/
+__pycache__/
+*.pth
+*.p
+*.jpg
