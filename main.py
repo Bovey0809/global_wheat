@@ -15,6 +15,9 @@ from matplotlib import pyplot as plt
 import dataPreprocessing
 import wheatDataloader
 from wheatDataloader import collate_fn
+import wandb
+wandb.init(project="global_wheat")
+
 
 DATA_DIR = 'data'
 # torch.backends.cudnn.benchmark = True
@@ -38,6 +41,9 @@ model = torchvision.models.detection.fasterrcnn_resnet50_fpn(
     pretrained=True, progress=True, pretrained_backbone=True)
 in_features = model.roi_heads.box_predictor.cls_score.in_features
 model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes=2)
+
+wandb.watch(model)
+
 # model = nn.DataParallel(model)
 model.to(device=device)
 
@@ -69,9 +75,7 @@ for epoch in range(2):
         optimizer.step()
         if iteration % 50:
             print(f"Iteration {iteration} Loss: {loss.mean().item()}")
-torch.save(model, 'final.pth')
+
+torch.save(model.state_dict(), os.path.join(wandb.run.dir, 'model.pt'))
 
 print('Finished Training')
-
-if __name__ == "__main__":
-    pass
