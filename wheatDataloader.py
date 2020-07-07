@@ -16,6 +16,8 @@ from PIL import Image
 from torchvision import transforms
 
 import dataPreprocessing
+import typing
+from typing import List
 
 
 class WheatDataset(torch.utils.data.Dataset):

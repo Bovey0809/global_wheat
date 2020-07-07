@@ -1,11 +1,16 @@
-from collections import defaultdict
-from numba import jit
-import torchvision
-from torchvision import ops
-import numpy as np
-from matplotlib import pyplot as plt
-import pandas as pd
 import random
+import typing
+from collections import defaultdict
+from typing import List
+
+import numpy as np
+import pandas as pd
+import torchvision
+from matplotlib import pyplot as plt
+from numba import jit
+from torchvision import ops
+from torchvision import transforms
+from torch import optim
 
 
 class EarlyStop(object):
@@ -74,6 +79,27 @@ def calculate_image_precision(gts, preds, thresholds=(0.5,)) -> float:
             gts.copy(), preds, threshold=threshold, ious=ious)
         image_precision += precition_at_threshold / n_threshold
     return image_precision
+
+
+def get_transforms(tsfms: List[str]):
+    transform_list = []
+    for tsfm in tsfms:
+        if tsfm == 'Normalize':
+            transform_list.append(
+                transforms.Normalize((0, 0, 0), (1, 1, 1)))
+        elif tsfm == 'RandomRotation':
+            transform_list.append(transforms.RandomRotation(90))
+        elif tsfm == 'RandomResizedCrop':
+            transform_list.append(transforms.RandomResizedCrop(512))
+        else:
+            transform_list.append(getattr(transforms, tsfm)())
+    transform_list.append(transforms.ToTensor())
+    return transforms.Compose(transform_list)
+
+
+def get_optimizer(optimizer):
+    optimizer = getattr(optim, optimizer)
+    return optimizer
 
 
 if __name__ == "__main__":

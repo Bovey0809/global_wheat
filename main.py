@@ -19,67 +19,27 @@ from torchvision import ops
 import utils
 from utils import calculate_image_precision
 
-
-np.random.seed(0)
-torch.manual_seed(0)
-
 hyperparameter_defaults = dict(
     batch_size=16,
     learning_rate=0.001,
     epochs=2,
-    opt='adam'  # optimizer
+    opt='adam',  # optimizer
+    frac=0.8,  # train / (train + val)
+    seed=0,
+    num_workers=8,
+    # To tensor is added to the last as default.
+    transforms=['RandomHorizontalFlip',
+                'RandomGrayscale', 'RandomRotation', 'RandomVerticalFlip'],
+    optimizer='Adam'  # SGD is also support
 )
 wandb.init(project="global_wheat", config=hyperparameter_defaults)
 DATA_DIR = 'data'
-torch.backends.cudnn.benchmark = True
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# torch.backends.cudnn.benchmark = True
 
-""" DATA """
-# DataPrerpocessing
-data = dataPreprocessing.dataPreprocess(DATA_DIR)
-train_ids, val_ids = data.random_split_dataset(frac=0.8)
 
-# Dataset
-tsfm = transforms.Compose([
-    transforms.ToTensor()
-])
-target_tsfm = torch.ones_like
-dataset = wheatDataloader.WheatDataset(train_ids, DATA_DIR, transforms=tsfm)
-dataloader = torch.utils.data.DataLoader(
-    dataset, batch_size=hyperparameter_defaults['batch_size'], num_workers=8, collate_fn=collate_fn)
-
-val_dataset = wheatDataloader.WheatDataset(val_ids, DATA_DIR, transforms=tsfm)
-val_dataloader = torch.utils.data.DataLoader(
-    val_dataset, batch_size=16, num_workers=8, collate_fn=collate_fn
-)
-
-""" MODEL """
-model = torchvision.models.detection.fasterrcnn_resnet50_fpn(
-    pretrained=True, progress=True, pretrained_backbone=True)
-in_features = model.roi_heads.box_predictor.cls_score.in_features
-model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes=2)
-# model = nn.DataParallel(model)
-model.to(device=device)
-
-params = [p for p in model.parameters() if p.requires_grad]
-if hyperparameter_defaults['opt'] == 'adam':
-    optimizer = torch.optim.Adam(
-        params, lr=hyperparameter_defaults['learning_rate'])
-else:
-    raise Exception("You have to choose one optimizer.")
-
-# loop over the dataset multiple times
-
-# For saving best model
-best_loss = float('inf')
-
-# For early stop
-steps = 3
-previous_loss = []
-
-for epoch in range(hyperparameter_defaults['epochs']):
-    for iteration, (images, targets, image_ids) in enumerate(dataloader, 0):
-        model.train(True)
+def train(model, dataloader, optimizer, epoch, device):
+    model.train(True)
+    for iteration, (images, targets, images_ids) in enumerate(dataloader, 0):
         images = images.to(device)
         targets = [{'boxes': i['boxes'].to(
             device), 'labels':i['labels'].to(device)} for i in targets]
@@ -90,24 +50,66 @@ for epoch in range(hyperparameter_defaults['epochs']):
         loss = sum(loss for loss in loss_dict.values())
         loss.backward()
         optimizer.step()
-        wandb.log({'Training_loss': loss.item(),
-                   'epoch': epoch, 'iter': iteration})
-        if iteration % 50 == 0:
-            model.eval()
-            # TODO Implement mAP for validation set.
-            # TODO: Implement mAP for training set.
-            # Calculate precision for training.
-            predictions = model(images)
-            for idx, prediction in enumerate(predictions):
-                boxes, labels, scores = prediction.values()
-                if boxes.shape[0] == 0:
-                    continue
-                else:
-                    gts = targets[idx]['boxes']
-                    # The scores is already sorted by the model.
-                    image_precision = calculate_image_precision(
-                        gts, boxes)
-                    print(image_precision)
-torch.save(model.state_dict(), os.path.join(wandb.run.dir, 'model.pt'))
+        # Log Training info
+        # loss
+        for k, v in loss_dict.items():
+            wandb.log({'_'.join(['Train', k]): v})
 
-print('Finished Training')
+
+def main():
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+
+    # Random seeds
+    seed = hyperparameter_defaults['seed']
+    random.seed(seed)
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    # Data loaders
+    frac = hyperparameter_defaults['frac']
+    batch_size = hyperparameter_defaults['batch_size']
+    num_workers = hyperparameter_defaults['num_workers']
+
+    data = dataPreprocessing.dataPreprocess(DATA_DIR)
+    train_ids, val_ids = data.random_split_dataset(frac)
+
+    tsfm = utils.get_transforms(
+        hyperparameter_defaults['transforms'])
+
+    train_dataset = wheatDataloader.WheatDataset(
+        train_ids, DATA_DIR, transforms=tsfm)
+    val_dataset = wheatDataloader.WheatDataset(
+        val_ids, DATA_DIR, transforms=tsfm)
+    eval_dataset = wheatDataloader.WheatDatasetTest(test_dir='test')
+
+    train_dataloader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn)
+    val_dataloader = torch.utils.data.DataLoader(
+        val_dataset, batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn)
+    eval_dataloader = torch.utils.data.DataLoader(eval_dataset, batch_size=1)
+
+    # Model
+    optimizer = hyperparameter_defaults['optimizer']
+    learning_rate = hyperparameter_defaults['learning_rate']
+
+    model = torchvision.models.detection.fasterrcnn_resnet50_fpn(
+        pretrained=True, pretrained_backbone=True
+    )
+    in_features = model.roi_heads.box_predictor.cls_score.in_features
+    model.roi_heads.box_predictor = FastRCNNPredictor(
+        in_features, num_classes=2)
+    model.to(device)
+    params = [p for p in model.parameters() if p.requires_grad]
+
+    optimizer = utils.get_optimizer(optimizer)(params, lr=learning_rate)
+
+    # Loop
+    epochs = hyperparameter_defaults['epochs']
+    for epoch in range(1, epochs+1):
+        train(model, train_dataloader, optimizer, epoch, device)
+        validation(model, val_dataloader)
+        evaluation(model, eval_dataloader)
+
+
+if __name__ == "__main__":
+    main()
