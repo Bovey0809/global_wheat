@@ -18,13 +18,14 @@ from torchvision import transforms
 from torchvision import ops
 import utils
 from utils import calculate_image_precision
+import PIL
+from PIL import Image
 
 hyperparameter_defaults = dict(
     batch_size=16,
     learning_rate=0.001,
     epochs=2,
-    opt='adam',  # optimizer
-    frac=0.8,  # train / (train + val)
+    frac=0.95,  # train / (train + val)
     seed=0,
     num_workers=8,
     # To tensor is added to the last as default.
@@ -54,27 +55,60 @@ def train(model, dataloader, optimizer, epoch, device):
         # loss
         for k, v in loss_dict.items():
             wandb.log({'_'.join(['Train', k]): v})
+        wandb.log({"Train_loss": loss})
 
 
-def test(model, dataloder):
+def test(model, dataloder, device):
     model.eval()
     test_loss = 0
     precision = 0
     best_loss = 100
+    id2labels = {0: "background", 1: "wheat"}
     with torch.no_grad():
         for iteration, (images, targets, images_ids) in enumerate(dataloder, 0):
             images = images.to(device)
             targets = [{'boxes': i['boxes'].to(
                 device), 'labels':i['labels'].to(device)} for i in targets]
-            # zero the parameter gradients
-            optimizer.zero_grad()
-            # forward + backward + optimize
-            loss_dict = model(images, targets)
-            loss = sum(loss for loss in loss_dict.values())
+            # precision
+            predictions = model(images)
 
-            # loss
-            for k, v in loss_dict.items():
-                wandb.log({'_'.join(['Validation', k]): v})
+            for i, prediction in enumerate(predictions):
+                boxes_pred = prediction['boxes']
+                scores = prediction['scores']
+                boxes_true = targets[i]['boxes']
+                thresholds = np.arange(0.5, 0.75, 0.05)
+                mean_precision = utils.calculate_mean_precision(
+                    boxes_true, boxes_pred, scores, thresholds)
+                wandb.log({"validation_mean_precision": mean_precision})
+
+                # Visulize image with precision
+                boxes_true = boxes_true.cpu().numpy()
+                boxes_pred = boxes_pred.cpu().numpy()
+                scores = scores.cpu().numpy()
+
+                box_data_pred = []
+                for idx, box in enumerate(boxes_pred):
+
+                    box_data_pred.append({
+                        "position": {"minX": int(box[0]), "maxX": int(box[2]), "minY": int(box[1]), "maxY": int(box[3])},
+                        "class_id": 1,
+                        "box_caption": f"{images_ids[i]}",
+                        "scores": {"confidence": float(scores[i])}})
+                box_data_true = []
+                for idx, box in enumerate(boxes_true):
+                    box_data_true.append({
+                        "position": {"minX": int(box[0]), "maxX": int(box[2]), "minY": int(box[1]), "maxY": int(box[3])},
+                        "class_id": 1,
+                        "box_caption": f"{images_ids[i]}"
+                    })
+
+                boxes_dict = {"predictions": {"box_data": box_data_pred, "class_labels": id2labels},
+                              "ground_truth": {"box_data": box_data_true, "class_labels": id2labels}}
+                img = Image.open(
+                    f"{DATA_DIR}/train/{images_ids[i]}.jpg").convert("RGB")
+                img = wandb.Image(
+                    img, caption=f"boxes_pred | boxes_true {mean_precision}", boxes=boxes_dict)
+                wandb.log({"pred boxes": img})
 
 
 def main():
@@ -129,7 +163,9 @@ def main():
     for epoch in range(1, epochs+1):
         train(model, train_dataloader, optimizer, epoch, device)
         test(model, val_dataloader, device)
-        evaluation(model, eval_dataloader)
+        # evaluation(model, eval_dataloader)
+
+    torch.save(model, 'model.pth')
 
 
 if __name__ == "__main__":

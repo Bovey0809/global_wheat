@@ -1,0 +1,22 @@
+program: main.py
+method: bayes
+metric:
+  name: Train_loss_rpn_box_reg
+  goal: minimize
+parameters:
+  batch_size:
+    min: 2
+    max: 16
+  epochs:
+    min: 2
+    max: 10
+  frac:
+    min: 0.5
+    max: 0.95
+  learning_rate:
+    values: [1e-4, 1e-3, 1e-2, 1e-1]
+  optimizer:
+    values: ['Adam', 'SGD']
+  transforms:
+    values: [["RandomHorizontalFlip"],["RandomGrayscale"],["RandomRotation"],["RandomVerticalFlip"]]
+
