@@ -1,22 +1,19 @@
 program: main.py
-method: bayes
+method: grid
 metric:
   name: Train_loss_rpn_box_reg
   goal: minimize
 parameters:
   batch_size:
-    min: 2
-    max: 16
+    value: 16
   epochs:
-    min: 2
-    max: 10
+    values: [2, 4, 6, 8, 10]
   frac:
-    min: 0.5
-    max: 0.95
+    value: 0.99
   learning_rate:
     values: [1e-4, 1e-3, 1e-2, 1e-1]
   optimizer:
-    values: ['Adam', 'SGD']
+    values: ['Adam']
   transforms:
-    values: [["RandomHorizontalFlip"],["RandomGrayscale"],["RandomRotation"],["RandomVerticalFlip"]]
+    values: [["RandomHorizontalFlip"],["RandomGrayscale"],["RandomRotation"],["RandomVerticalFlip"],[]]
 

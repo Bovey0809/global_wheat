@@ -25,12 +25,12 @@ hyperparameter_defaults = dict(
     batch_size=16,
     learning_rate=0.001,
     epochs=2,
-    frac=0.95,  # train / (train + val)
+    frac=0.99,  # train / (train + val)
     seed=0,
     num_workers=8,
     # To tensor is added to the last as default.
-    transforms=['RandomHorizontalFlip',
-                'RandomGrayscale', 'RandomRotation', 'RandomVerticalFlip'],
+    transforms=['RandomHorizontalFlip'],
+    # 'RandomGrayscale', 'RandomRotation', 'RandomVerticalFlip'],
     optimizer='Adam'  # SGD is also support
 )
 wandb.init(project="global_wheat", config=hyperparameter_defaults)
@@ -56,12 +56,13 @@ def train(model, dataloader, optimizer, epoch, device):
         for k, v in loss_dict.items():
             wandb.log({'_'.join(['Train', k]): v})
         wandb.log({"Train_loss": loss})
+        if iteration % 10 == 0:
+            print(loss.item())
 
 
 def test(model, dataloder, device):
     model.eval()
     test_loss = 0
-    precision = 0
     best_loss = 100
     id2labels = {0: "background", 1: "wheat"}
     with torch.no_grad():
@@ -71,7 +72,7 @@ def test(model, dataloder, device):
                 device), 'labels':i['labels'].to(device)} for i in targets]
             # precision
             predictions = model(images)
-
+            batch_precision = 0
             for i, prediction in enumerate(predictions):
                 boxes_pred = prediction['boxes']
                 scores = prediction['scores']
@@ -80,7 +81,7 @@ def test(model, dataloder, device):
                 mean_precision = utils.calculate_mean_precision(
                     boxes_true, boxes_pred, scores, thresholds)
                 wandb.log({"validation_mean_precision": mean_precision})
-
+                batch_precision += mean_precision
                 # Visulize image with precision
                 boxes_true = boxes_true.cpu().numpy()
                 boxes_pred = boxes_pred.cpu().numpy()
@@ -108,7 +109,9 @@ def test(model, dataloder, device):
                     f"{DATA_DIR}/train/{images_ids[i]}.jpg").convert("RGB")
                 img = wandb.Image(
                     img, caption=f"boxes_pred | boxes_true {mean_precision}", boxes=boxes_dict)
-                wandb.log({"pred boxes": img})
+                wandb.log({f"{images_ids[i]}": img})
+            batch_precision /= len(predictions)
+            wandb.log({'batch_precision': batch_precision})
 
 
 def main():
