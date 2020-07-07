@@ -56,6 +56,27 @@ def train(model, dataloader, optimizer, epoch, device):
             wandb.log({'_'.join(['Train', k]): v})
 
 
+def test(model, dataloder):
+    model.eval()
+    test_loss = 0
+    precision = 0
+    best_loss = 100
+    with torch.no_grad():
+        for iteration, (images, targets, images_ids) in enumerate(dataloder, 0):
+            images = images.to(device)
+            targets = [{'boxes': i['boxes'].to(
+                device), 'labels':i['labels'].to(device)} for i in targets]
+            # zero the parameter gradients
+            optimizer.zero_grad()
+            # forward + backward + optimize
+            loss_dict = model(images, targets)
+            loss = sum(loss for loss in loss_dict.values())
+
+            # loss
+            for k, v in loss_dict.items():
+                wandb.log({'_'.join(['Validation', k]): v})
+
+
 def main():
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
@@ -107,7 +128,7 @@ def main():
     epochs = hyperparameter_defaults['epochs']
     for epoch in range(1, epochs+1):
         train(model, train_dataloader, optimizer, epoch, device)
-        validation(model, val_dataloader)
+        test(model, val_dataloader, device)
         evaluation(model, eval_dataloader)
 
 
