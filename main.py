@@ -25,7 +25,7 @@ hyperparameter_defaults = dict(
     batch_size=16,
     learning_rate=0.001,
     epochs=2,
-    frac=0.99,  # train / (train + val)
+    frac=0.999,  # train / (train + val)
     seed=0,
     num_workers=8,
     # To tensor is added to the last as default.
@@ -33,7 +33,8 @@ hyperparameter_defaults = dict(
     # 'RandomGrayscale', 'RandomRotation', 'RandomVerticalFlip'],
     optimizer='Adam'  # SGD is also support
 )
-wandb.init(project="global_wheat", config=hyperparameter_defaults)
+wandb.init(project="global_wheat", config=hyperparameter_defaults,
+           tags=['image func test'])
 DATA_DIR = 'data'
 # torch.backends.cudnn.benchmark = True
 
@@ -60,7 +61,7 @@ def train(model, dataloader, optimizer, epoch, device):
             print(loss.item())
 
 
-def test(model, dataloder, device):
+def test(model, dataloder, epoch, device):
     model.eval()
     test_loss = 0
     best_loss = 100
@@ -82,33 +83,22 @@ def test(model, dataloder, device):
                     boxes_true, boxes_pred, scores, thresholds)
                 wandb.log({"validation_mean_precision": mean_precision})
                 batch_precision += mean_precision
+
                 # Visulize image with precision
                 boxes_true = boxes_true.cpu().numpy()
                 boxes_pred = boxes_pred.cpu().numpy()
                 scores = scores.cpu().numpy()
 
-                box_data_pred = []
-                for idx, box in enumerate(boxes_pred):
-
-                    box_data_pred.append({
-                        "position": {"minX": int(box[0]), "maxX": int(box[2]), "minY": int(box[1]), "maxY": int(box[3])},
-                        "class_id": 1,
-                        "box_caption": f"{images_ids[i]}",
-                        "scores": {"confidence": float(scores[i])}})
-                box_data_true = []
-                for idx, box in enumerate(boxes_true):
-                    box_data_true.append({
-                        "position": {"minX": int(box[0]), "maxX": int(box[2]), "minY": int(box[1]), "maxY": int(box[3])},
-                        "class_id": 1,
-                        "box_caption": f"{images_ids[i]}"
-                    })
-
+                box_data_pred = utils.create_box_data(
+                    boxes_pred, scores=scores, caption_prefix='Validation_pred', iteration=epoch)
+                box_data_true = utils.create_box_data(
+                    boxes_true, caption_prefix='Validation_GT', iteration=epoch)
                 boxes_dict = {"predictions": {"box_data": box_data_pred, "class_labels": id2labels},
                               "ground_truth": {"box_data": box_data_true, "class_labels": id2labels}}
                 img = Image.open(
                     f"{DATA_DIR}/train/{images_ids[i]}.jpg").convert("RGB")
                 img = wandb.Image(
-                    img, caption=f"boxes_pred | boxes_true {mean_precision}", boxes=boxes_dict)
+                    img, 'RGB', caption=f"{images_ids[i]}", boxes=boxes_dict)
                 wandb.log({f"{images_ids[i]}": img})
             batch_precision /= len(predictions)
             wandb.log({'batch_precision': batch_precision})
@@ -165,7 +155,7 @@ def main():
     epochs = hyperparameter_defaults['epochs']
     for epoch in range(1, epochs+1):
         train(model, train_dataloader, optimizer, epoch, device)
-        test(model, val_dataloader, device)
+        test(model, val_dataloader, epoch, device)
         # evaluation(model, eval_dataloader)
 
     torch.save(model, 'model.pth')

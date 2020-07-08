@@ -13,6 +13,7 @@ from matplotlib import pyplot as plt
 from numba import jit
 from torch import optim as optim
 from torchvision import ops, transforms
+import wandb
 
 
 class EarlyStop(object):
@@ -140,6 +141,47 @@ def calculate_mean_precision(boxes_true, boxes_pred, confidences, thresholds=(0.
         precision[i] = calculate_precision(
             boxes_true, boxes_pred, confidences, threshold=threshold)
     return precision.mean()
+
+
+def create_box_data(boxes, labels=None, scores=None, caption_prefix='image', iteration=0):
+    """Create a dict for boxes inorder to draw or used for json.
+
+    Args:
+        boxes: xyxy format boxes of shape N x 4.
+        caption_prefix: the prefix for the image.
+
+    Returns:
+        return dictionary
+    """
+    if labels is None:
+        labels = [1] * len(boxes)
+    if scores is None:
+        scores = [1] * len(boxes)
+    box_data = []
+    for idx, box in enumerate(boxes):
+        box_data.append({
+            "position": {"minX": int(box[0]), "maxX": int(box[2]), "minY": int(box[1]), "maxY": int(box[3])},
+            "class_id": labels[idx],
+            "domain": "pixel",
+            "box_caption": f"{caption_prefix}: iter {iteration} box: {idx}",
+            "scores": {"confidence": float(scores[idx])}})
+    return box_data
+
+
+def draw_image(image, box_data, caption='image_id', group='predictions'):
+    """Draw boxes on images and assigned to a group.
+
+    Args:
+        image: PIL image.
+        box_data: dict create from func "create_box_data" or create by yourself.
+        caption: The unique name for the image.
+        group: the group to use to show images.
+
+    Returns:
+        retun wandb.Image object.
+    """
+    boxes_dict = {f"{group}": {"box_data": box_data}}
+    return wandb.Image(image, caption=caption, boxes=boxes_dict)
 
 
 if __name__ == "__main__":
