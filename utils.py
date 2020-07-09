@@ -12,7 +12,10 @@ import torchvision
 from matplotlib import pyplot as plt
 from numba import jit
 from torch import optim as optim
-from torchvision import ops, transforms
+from torchvision import ops
+import albumentations as transforms
+from albumentations.pytorch.transforms import ToTensorV2
+
 import wandb
 
 
@@ -87,17 +90,17 @@ def calculate_image_precision(gts, preds, thresholds=(0.5,)) -> float:
 def get_transforms(tsfms: List[str]):
     transform_list = []
     for tsfm in tsfms:
-        if tsfm == 'Normalize':
+        if tsfm == 'RandomCrop':
             transform_list.append(
-                transforms.Normalize((0, 0, 0), (1, 1, 1)))
-        elif tsfm == 'RandomRotation':
-            transform_list.append(transforms.RandomRotation(90))
-        elif tsfm == 'RandomResizedCrop':
-            transform_list.append(transforms.RandomResizedCrop(512))
+                transforms.RandomCrop(512, 512))
+        elif tsfm == 'RandomSizedCrop':
+            transform_list.append(
+                transforms.RandomSizedCrop((500, 800), 512, 512)
+            )
         else:
             transform_list.append(getattr(transforms, tsfm)())
-    transform_list.append(transforms.ToTensor())
-    return transforms.Compose(transform_list)
+    transform_list.append(ToTensorV2())
+    return transforms.Compose(transform_list, bbox_params={'format': 'pascal_voc', 'label_fields': ['labels']})
 
 
 def get_optimizer(optimizer):
@@ -182,6 +185,16 @@ def draw_image(image, box_data, caption='image_id', group='predictions'):
     """
     boxes_dict = {f"{group}": {"box_data": box_data}}
     return wandb.Image(image, caption=caption, boxes=boxes_dict)
+
+
+def assert_same(config, hyperparameters):
+    for key1, key2 in zip(config.keys(), hyperparameters.keys()):
+        assert config[key1] == hyperparameters[key2]
+
+
+def get_lr(optimizer):
+    for param_group in optimizer.param_groups:
+        return param_group['lr']
 
 
 if __name__ == "__main__":

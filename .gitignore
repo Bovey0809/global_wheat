@@ -6,3 +6,5 @@ __pycache__/
 *.p
 *.jpg
 wandb/
+wandb/settings
+

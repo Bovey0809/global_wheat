@@ -15,6 +15,9 @@ from wheatDataloader import collate_fn
 import utils
 from utils import calculate_image_precision
 
+import wandb
+wandb.init(project='global_wheat')
+
 
 def xyxy_xywh(boxes):
     """Change bounding boxes from xyxy to xywh.

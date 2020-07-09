@@ -1,7 +1,8 @@
 import glob
 import os
 import random
-
+import albumentations
+from albumentations.pytorch.transforms import ToTensorV2
 import cv2
 import numpy as np
 import pandas as pd
@@ -54,15 +55,25 @@ class WheatDataset(torch.utils.data.Dataset):
             image_id).loc[:, ['x', 'y', 'x2', 'y2', 'source', 'area']].values
         bboxes, labels, areas = data[:, :4], data[:, -2], data[:, -1]
 
-        bboxes = torch.from_numpy(bboxes.astype(np.float32))
+        # bboxes = torch.from_numpy(bboxes.astype(np.float32))
+        bboxes = bboxes.astype(np.int64)
         labels = torch.ones(labels.shape, dtype=torch.int64)
 
         # image
         img_path = os.path.join(self.img_dir, 'train', image_id + '.jpg')
-        image = Image.open(img_path).convert('RGB')
+        image = cv2.imread(img_path, cv2.COLOR_BGR2RGB).astype(np.float32)
+        # THE TRICK
+        image /= 255.0
         # The image is in HWC, we need to convert to CHW.
         if self.transforms:
-            image = self.transforms(image)
+            sample = {
+                'image': image,
+                'bboxes': bboxes,
+                'labels': labels}
+            sample = self.transforms(**sample)
+            image = sample['image']
+            bboxes = torch.stack(
+                tuple(map(torch.FloatTensor, zip(*sample['bboxes'])))).permute(1, 0)
         if self.target_transforms:
             labels = self.target_transforms(labels)
         return image, bboxes, labels, image_id
@@ -102,9 +113,21 @@ if __name__ == "__main__":
         data_path).random_split_dataset()
 
     # Test dataloader
-    tsfm = torchvision.transforms.Compose([transforms.ToTensor()])
+    tsfm = albumentations.Compose([
+        albumentations.Resize(800, 800),
+        albumentations.Flip(0.5),
+        ToTensorV2(p=1.0)
+    ], bbox_params={'format': 'pascal_voc', 'label_fields': ['labels']})
 
     dataset = WheatDataset(
         val_ids, data_path, transforms=tsfm)
     image, bbox, label, imageid = dataset[random.randint(
         0, len(dataset))]
+    print(image, bbox, label)
+
+    image = image.permute(1, 2, 0).cpu().numpy()
+    bbox = bbox.numpy().astype(int)
+    for box in bbox:
+        cv2.rectangle(image, (box[0], box[1]),
+                      (box[2], box[3]), (255, 0, 0), 3)
+    plt.imshow(image.astype(int))

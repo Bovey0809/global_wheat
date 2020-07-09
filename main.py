@@ -20,45 +20,56 @@ import utils
 from utils import calculate_image_precision
 import PIL
 from PIL import Image
+import albumentations
+from albumentations.pytorch.transforms import ToTensorV2
+from albumentations.core.transforms_interface import DualTransform
+from albumentations.augmentations.bbox_utils import denormalize_bbox, normalize_bbox
 
 hyperparameter_defaults = dict(
     batch_size=16,
-    learning_rate=0.001,
-    epochs=2,
+    learning_rate=0.005,
+    epochs=4,
     frac=0.999,  # train / (train + val)
     seed=0,
-    num_workers=8,
+    num_workers=0,
     # To tensor is added to the last as default.
-    transforms=['RandomHorizontalFlip'],
+    transforms=['Flip'],
     # 'RandomGrayscale', 'RandomRotation', 'RandomVerticalFlip'],
-    optimizer='Adam'  # SGD is also support
+    optimizer='SGD',  # SGD is also support,
+    lr_step=2000
 )
+
 wandb.init(project="global_wheat", config=hyperparameter_defaults,
-           tags=['image func test'])
+           tags=['sgd'])
+print(hyperparameter_defaults)
 DATA_DIR = 'data'
-# torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.benchmark = True
+utils.assert_same(wandb.config, hyperparameter_defaults)
 
 
-def train(model, dataloader, optimizer, epoch, device):
+def train(model, dataloader, optimizer, epoch, device, lr_scheduler):
     model.train(True)
     for iteration, (images, targets, images_ids) in enumerate(dataloader, 0):
         images = images.to(device)
         targets = [{'boxes': i['boxes'].to(
             device), 'labels':i['labels'].to(device)} for i in targets]
-        # zero the parameter gradients
-        optimizer.zero_grad()
-        # forward + backward + optimize
+
         loss_dict = model(images, targets)
         loss = sum(loss for loss in loss_dict.values())
+
+        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        # Log Training info
-        # loss
+
+        if lr_scheduler:
+            lr_scheduler.step()
+
         for k, v in loss_dict.items():
             wandb.log({'_'.join(['Train', k]): v})
         wandb.log({"Train_loss": loss})
-        if iteration % 10 == 0:
-            print(loss.item())
+        if iteration % 50 == 0:
+            print(
+                f"epoch:{epoch} iter: {iteration} loss:{loss.item()} lr: {utils.get_lr(optimizer)}")
 
 
 def test(model, dataloder, epoch, device):
@@ -81,7 +92,7 @@ def test(model, dataloder, epoch, device):
                 thresholds = np.arange(0.5, 0.75, 0.05)
                 mean_precision = utils.calculate_mean_precision(
                     boxes_true, boxes_pred, scores, thresholds)
-                wandb.log({"validation_mean_precision": mean_precision})
+                # wandb.log({"validation_mean_precision": mean_precision})
                 batch_precision += mean_precision
 
                 # Visulize image with precision
@@ -101,33 +112,43 @@ def test(model, dataloder, epoch, device):
                     img, 'RGB', caption=f"{images_ids[i]}", boxes=boxes_dict)
                 wandb.log({f"{images_ids[i]}": img})
             batch_precision /= len(predictions)
-            wandb.log({'batch_precision': batch_precision})
+            wandb.log({"batch_precision": batch_precision})
 
 
 def main():
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
     # Random seeds
-    seed = hyperparameter_defaults['seed']
+    seed = wandb.config.seed
     random.seed(seed)
     torch.manual_seed(seed)
     np.random.seed(seed)
 
     # Data loaders
-    frac = hyperparameter_defaults['frac']
-    batch_size = hyperparameter_defaults['batch_size']
-    num_workers = hyperparameter_defaults['num_workers']
+    frac = wandb.config.frac
+    batch_size = wandb.config.batch_size
+    num_workers = wandb.config.num_workers
 
     data = dataPreprocessing.dataPreprocess(DATA_DIR)
     train_ids, val_ids = data.random_split_dataset(frac)
 
     tsfm = utils.get_transforms(
-        hyperparameter_defaults['transforms'])
+        wandb.config.transforms)
+
+    # tsfm = albumentations.Compose([
+    #     # albumentations.Resize(800, 800),
+    #     albumentations.Flip(0.5),
+    #     ToTensorV2(p=1.0)
+    # ], bbox_params={'format': 'pascal_voc', 'label_fields': ['labels']})
+
+    val_tsfm = albumentations.Compose([
+        ToTensorV2(p=1.0)
+    ], bbox_params={'format': 'pascal_voc', 'label_fields': ['labels']})
 
     train_dataset = wheatDataloader.WheatDataset(
         train_ids, DATA_DIR, transforms=tsfm)
     val_dataset = wheatDataloader.WheatDataset(
-        val_ids, DATA_DIR, transforms=tsfm)
+        val_ids, DATA_DIR, transforms=val_tsfm)
     eval_dataset = wheatDataloader.WheatDatasetTest(test_dir='test')
 
     train_dataloader = torch.utils.data.DataLoader(
@@ -137,24 +158,27 @@ def main():
     eval_dataloader = torch.utils.data.DataLoader(eval_dataset, batch_size=1)
 
     # Model
-    optimizer = hyperparameter_defaults['optimizer']
-    learning_rate = hyperparameter_defaults['learning_rate']
-
+    optimizer = wandb.config.optimizer
+    learning_rate = wandb.config.learning_rate
+    lr_step = wandb.config.lr_step
     model = torchvision.models.detection.fasterrcnn_resnet50_fpn(
-        pretrained=True, pretrained_backbone=True
-    )
+        pretrained=True)
     in_features = model.roi_heads.box_predictor.cls_score.in_features
     model.roi_heads.box_predictor = FastRCNNPredictor(
         in_features, num_classes=2)
     model.to(device)
     params = [p for p in model.parameters() if p.requires_grad]
-
-    optimizer = utils.get_optimizer(optimizer)(params, lr=learning_rate)
+    if optimizer == 'Adam':
+        optimizer = utils.get_optimizer(optimizer)(params, learning_rate)
+    if optimizer == 'SGD':
+        optimizer = utils.get_optimizer(optimizer)(
+            params, lr=learning_rate, momentum=0.9, weight_decay=0.0005)
+    lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, lr_step)
 
     # Loop
-    epochs = hyperparameter_defaults['epochs']
+    epochs = wandb.config.epochs
     for epoch in range(1, epochs+1):
-        train(model, train_dataloader, optimizer, epoch, device)
+        train(model, train_dataloader, optimizer, epoch, device, lr_scheduler)
         test(model, val_dataloader, epoch, device)
         # evaluation(model, eval_dataloader)
 
